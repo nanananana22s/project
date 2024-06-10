@@ -1,0 +1,245 @@
+from aiogram import Router
+from aiogram.filters import CommandStart
+from aiogram.types import Message, CallbackQuery
+from aiogram.fsm.context import FSMContext
+
+from app.states.user_states import User
+from useful_funcs.user.funcs import correction_name, check_phone_number, is_leap_year
+from app.keyboards.universal_keyboard import completing_keyboard
+from app.keyboards.user_keyboards.inline_keyboards import (choice_sex_keyboard,
+                                                           choice_project_keyboard,
+                                                           years_calendar,
+                                                           month_kalendar_keyboard,
+                                                           generate_days_keyboard,
+                                                           choice_mistake
+                                                           )
+
+user_start_router = Router()
+
+
+@user_start_router.message(CommandStart())
+async def cmd_start(message: Message, state: FSMContext):
+    await message.answer(
+        "Привет, коллега!👋\n"
+        "Я бот группы компаний «ГРАСТ».\n"
+        "Готов помочь тебе с поиском информации, выслушать твои идеи по оптимизации процессов и "
+        "рассказать как и где провести интересные выходные!\n"
+        "Давай познакомимся!\n"
+        "Пожалуйста, назови своё имя"
+    )
+    await state.set_state(User.registration_first_name)
+
+
+@user_start_router.message(User.registration_first_name)
+async def registration_middle_name(message: Message, state: FSMContext):
+    if all(char.isalpha() or char in ['-', ' '] for char in message.text):
+        correct_text = correction_name(message.text)
+        await message.answer('Спасибо!\nТеперь назови, пожалуйста свою фамилию')
+        await state.set_state(User.registration_middle_name)
+        await state.update_data(first_name=correct_text)
+    else:
+        await message.answer('Неверный формат ввода.')
+
+
+@user_start_router.message(User.registration_middle_name)
+async def registration_last_name(message: Message, state: FSMContext):
+    if all(char.isalpha() or char in ['-', ' '] for char in message.text):
+        correct_text = correction_name(message.text)
+        await message.answer('Спасибо!\nТеперь назови, пожалуйста свое отчество')
+        await state.set_state(User.registration_last_name)
+        await state.update_data(middle_name=correct_text)
+    else:
+        await message.answer('Неверный формат ввода.')
+
+
+@user_start_router.message(User.registration_last_name)
+async def registration_year(message: Message, state: FSMContext):
+    if all(char.isalpha() or char in ['-', ' '] for char in message.text):
+        correct_text = correction_name(message.text)
+        new_info = years_calendar()
+        await state.update_data(default_buttons_list=new_info[0])
+        await message.answer(text='Спасибо!\nВыбери год своего рождения.', reply_markup=new_info[1])
+        await state.set_state(User.registration_year)
+        await state.update_data(last_name=correct_text)
+    else:
+        await message.answer('Неверный формат ввода.')
+
+
+@user_start_router.callback_query(User.registration_year)
+async def registration_month(callback: CallbackQuery, state: FSMContext):
+    if callback.data == '>' or callback.data == '<':
+        data = await state.get_data()
+        new_info = years_calendar(default_buttons_list=data['default_buttons_list'], operation=callback.data)
+        await state.update_data(default_buttons_list=new_info[0])
+        await callback.message.edit_text(text='Спасибо!\nВыбери год своего рождения.', reply_markup=new_info[1])
+
+    else:
+        await state.update_data(year=callback.data)
+        await state.set_state(User.registration_month)
+        await callback.message.edit_text(text='Спасибо!\nВыбери месяц своего рождения.',
+                                         reply_markup=month_kalendar_keyboard)
+
+
+@user_start_router.callback_query(User.registration_month)
+async def registration_day(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    leap = is_leap_year(data['year'])
+    keyboard = generate_days_keyboard(leap, callback.data)
+    await callback.message.edit_text(text="Спасибо!\nВыбери день своего рождения.", reply_markup=keyboard)
+    await state.update_data(month=callback.data)
+    if 'sex' in data:
+        await state.set_state(User.registration_correction_callback)
+    else:
+        await state.set_state(User.registration_day)
+
+
+@user_start_router.callback_query(User.registration_day)
+async def registration_sex(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(User.registration_sex)
+    await state.update_data(day=callback.data)
+    await callback.message.answer(text='Спасибо!\nКакого ты пола?', reply_markup=choice_sex_keyboard)
+    await state.set_state(User.registration_sex)
+
+
+@user_start_router.callback_query(User.registration_sex)
+async def registration_position(callback: CallbackQuery, state: FSMContext):
+    await state.update_data(sex=callback.data)
+    await callback.message.answer('Супер!\nКакая у тебя должность?')
+    await state.set_state(User.registration_position)
+
+
+@user_start_router.message(User.registration_position)
+async def registration_project(message: Message, state: FSMContext):
+    await state.update_data(position=message.text)
+    await message.answer(text='Здорово!\nВ каком проекты ты работаешь?', reply_markup=choice_project_keyboard)
+    await state.set_state(User.registration_project)
+
+
+@user_start_router.callback_query(User.registration_project)
+async def registration_phone_number(callback: CallbackQuery, state: FSMContext):
+    await state.update_data(project=callback.data)
+    await state.set_state(User.registration_phone_number)
+    await callback.message.answer('Круто!\nПоследний вопрос - напиши, пожалуйста, свой номер телефона')
+
+
+@user_start_router.message(User.registration_phone_number)
+async def registration_end(message: Message, state: FSMContext):
+    if all(char.isdigit() or char in ['+'] for char in message.text):
+        correction_phone_num = check_phone_number(message.text)
+        await state.update_data(phone_num=correction_phone_num)
+        data = await state.get_data()
+        await state.set_state(User.registration_end)
+        await message.answer(text=f"Спасибо за ответы! \nТеперь давай проверим, верно ли я всё записал:"
+                                  f"\nИмя {data['first_name']} "
+                                  f"\nФамилия {data['middle_name']}"
+                                  f"\nОтчество {data['last_name']}"
+                                  f"\nДата рождения {data['day']} {data['month']} {data['year']}"
+                                  f"\nПол {data['sex']}"
+                                  f"\nДолжность {data['position']}"
+                                  f"\nПроект {data['project']}"
+                                  f"\nНомер телефона {data['phone_num']}",
+                             reply_markup=completing_keyboard)
+    else:
+        await message.answer('Некорректный формат номера телефона попробуйте снова!')
+
+
+@user_start_router.callback_query(User.registration_end)
+async def check_info(callback: CallbackQuery, state: FSMContext):
+    if callback.data == 'Да':
+        await callback.message.answer(text='Спасибо за ответы! Желаю хорошего дня и приятной работы!')
+        await state.clear()
+    else:
+        await state.set_state(User.registration_check_info)
+        await callback.message.answer(text='Извиняюсь за путаницу, давайте исправим ошибку. Выберите пункт который '
+                                           'хотите исправить.',
+                                      reply_markup=choice_mistake)
+
+
+@user_start_router.callback_query(User.registration_check_info)
+async def correct_mistake(callback: CallbackQuery, state: FSMContext):
+    if callback.data == 'Имя':
+        await state.update_data(first_name='')
+        await callback.message.answer("Пожалуйста, назови своё имя")
+        await state.set_state(User.registration_correction_message)
+    if callback.data == 'Фамилия':
+        await state.update_data(middle_name='')
+        await callback.message.answer("Пожалуйста, назови свою фамилию")
+        await state.set_state(User.registration_correction_message)
+    if callback.data == 'Отчество':
+        await state.update_data(last_name='')
+        await callback.message.answer("Пожалуйста, назови своё отчество")
+        await state.set_state(User.registration_correction_message)
+    if callback.data == 'Год рождения':
+        new_info = years_calendar()
+        await state.update_data(default_buttons_list=new_info[0])
+        await callback.message.answer(text='Выбери год своего рождения.', reply_markup=new_info[1])
+        await state.set_state(User.registration_year)
+    if callback.data == 'Пол':
+        await callback.message.answer(text='Какого ты пола?', reply_markup=choice_sex_keyboard)
+        await state.set_state(User.registration_correction_callback)
+    if callback.data == 'Должность':
+        await state.set_state(User.registration_correction_message)
+        await state.update_data(position='')
+        await callback.message.answer('Какая у тебя должность?')
+    if callback.data == 'Проект':
+        await callback.message.answer(text='В каком проекты ты работаешь?', reply_markup=choice_project_keyboard)
+        await state.set_state(User.registration_correction_callback)
+    if callback.data == 'Номер телефона':
+        await state.set_state(User.registration_correction_message)
+        await state.update_data(phone_num='')
+        await callback.message.answer(text='Напиши, пожалуйста, свой номер телефона?')
+
+
+@user_start_router.callback_query(User.registration_correction_callback)
+async def correction_callback(callback: CallbackQuery, state: FSMContext):
+    if callback.data.isdigit():
+        await state.update_data(day=callback.data)
+    elif callback.data == 'Муж' or callback.data == 'Жен':
+        await state.update_data(sex=callback.data)
+    else:
+        await state.update_data(position=callback.data)
+
+    data = await state.get_data()
+    await state.set_state(User.registration_end)
+    await callback.message.answer(text=f"Спасибо за ответы! \nТеперь давай проверим, верно ли я всё записал:"
+                              f"\nИмя {data['first_name']} "
+                              f"\nФамилия {data['middle_name']}"
+                              f"\nОтчество {data['last_name']}"
+                              f"\nДата рождения {data['day']} {data['month']} {data['year']}"
+                              f"\nПол {data['sex']}"
+                              f"\nДолжность {data['position']}"
+                              f"\nПроект {data['project']}"
+                              f"\nНомер телефона {data['phone_num']}",
+                         reply_markup=completing_keyboard)
+
+
+@user_start_router.message(User.registration_correction_message)
+async def correction_messages(message: Message, state: FSMContext):
+    data = await state.get_data()
+    if 'first_name' in data or 'middle_name' or 'last_name' in data or 'position' or 'phone_num' in data:
+        if data['first_name'] == '':
+            correct_text = correction_name(message.text)
+            await state.update_data(first_name=correct_text)
+        if data['middle_name'] == '':
+            correct_text = correction_name(message.text)
+            await state.update_data(middle_name=correct_text)
+        if data['last_name'] == '':
+            correct_text = correction_name(message.text)
+            await state.update_data(last_name=correct_text)
+        if data['position'] == '':
+            await state.update_data(position=message.text)
+        if data['phone_num'] == '':
+            correction_phone_num = check_phone_number(message.text)
+            await state.update_data(phone_num=correction_phone_num)
+        data = await state.get_data()
+        await state.set_state(User.registration_end)
+        await message.answer(text=f"Спасибо за ответы! \nТеперь давай проверим, верно ли я всё записал:"
+                                  f"\nИмя {data['first_name']} "
+                                  f"\nФамилия {data['middle_name']}"
+                                  f"\nОтчество {data['last_name']}"
+                                  f"\nДата рождения {data['day']} {data['month']} {data['year']}"
+                                  f"\nПол {data['sex']}"
+                                  f"\nДолжность {data['position']}"
+                                  f"\nПроект {data['project']}"
+                                  f"\nНомер телефона {data['phone_num']}",
+                             reply_markup=completing_keyboard)
